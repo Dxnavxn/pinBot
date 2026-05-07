@@ -5,6 +5,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import datetime
 from colorama import init, Fore
+from typing import Dict, Any
 
 # ---------------- Logging ---------------- # 
 # SHOUTOUT EIGHTBY8
@@ -40,6 +41,8 @@ else:
 # ---------------- Defaults ---------------- #
 DEFAULT_CHANNEL_ID: int = None 
 
+# ---------------- In-Memory States ---------------- #
+userReactions: Dict[int, list[str]] = {}
 
 
 
@@ -82,26 +85,16 @@ def loadConfig():
         log(f"Failed to load config: {e}", "ERROR")
 
 
-# ---------------- Commands ---------------- #
-@tree.command(name="setchannel", description="Set the channel where all embeds will be sent")
-async def set_channel(interaction: discord.Interaction) -> None:
-    global CHANNEL_ID
-    
-    if OWNER_ID is None:
-        log("Permission check failed: OWNER_ID is not set in .env or config.", "ERROR")
-        return await interaction.response.send_message("Bot configuration error: Owner ID not found.", ephemeral=True)
 
-    if interaction.user.id != int(OWNER_ID):
-        return await interaction.response.send_message("You do not have permission to set channels.", ephemeral=True)
-
-    CHANNEL_ID = interaction.channel.id
-    saveConfig()
-
-    await interaction.response.send_message(f"Pinboard channel set to: {interaction.channel.mention}")
-    log(f"Pinboard channel set to {interaction.channel.id} by {interaction.user.name.capitalize()}", "INFO")
-
+# ---------------- Bot Setup ---------------- #
 @bot.event
 async def on_ready():
+    # Sync Commands
+    try:
+        synced = await bot.tree.sync()
+        log(f"Synced {len(synced)} slash commands", "INFO")
+    except Exception as e:
+        log(f"Failed to sync commands: {e}", "ERROR")
 
     # Bot Status | Version number
     versionNumber = "v0.1"
@@ -116,7 +109,6 @@ async def on_ready():
     if OWNER_ID is None:
         if GUILD_ID:
             try:
-                # Convert the string from .env to an integer here
                 guild_id = int(GUILD_ID)
                 guild = bot.get_guild(guild_id)
                 
@@ -135,7 +127,82 @@ async def on_ready():
         else:
             log("GUILD_ID is missing from your .env file!", "ERROR")
 
+# ---------------- Bot Events ---------------- #
+@bot.event
+async def on_raw_reaction_add(content: discord.RawReactionData) -> None:
+    if content.emoji.name == "📌":
+        try:
+            channel = bot.get_channel(content.channel_id) or await bot.fetch_channel(content.message_id)
+            message = await channel.fetch_message(content.message_id)
 
+            if message.author.bot:
+                return
+
+            log(f"Message pinned | Channel: [#{channel.name}] | Message: {message.content[:25]}...","INFO")
+
+        except Exception as e:
+            log(f"Failed to fetch message for pin: {e}", "ERROR")
+    
+
+@bot.event
+async def on_raw_reaction_remove(content: discord.RawReactionData) -> None:
+    if content.emoji.name == "📌":
+        try:
+            channel = bot.get_channel(content.channel_id) or await bot.fetch_channel(content.message_id)
+            message = await channel.fetch_message(content.message_id)
+            log(f"Message removed | Channel: [#{channel.name}] | Message: {message.content[:25]}...","INFO")
+
+        except Exception as e:
+            log(f"Failed to fetch message for pin: {e}", "ERROR")
+
+# ---------------- Commands ---------------- #
+@tree.command(name="setchannel", description="Set the channel where all pins will be sent")
+async def set_channel(interaction: discord.Interaction) -> None:
+    global CHANNEL_ID
+    
+    if OWNER_ID is None:
+        log("Permission check failed: OWNER_ID is not set in .env or config.", "ERROR")
+        return await interaction.response.send_message("Bot configuration error: Owner ID not found.", ephemeral=True)
+
+    if interaction.user.id != int(OWNER_ID):
+        return await interaction.response.send_message("You do not have permission to set channels.", ephemeral=True)
+
+    CHANNEL_ID = interaction.channel.id
+    saveConfig()
+
+    await interaction.response.send_message(f"Pinboard channel set to: {interaction.channel.mention}")
+    log(f"Pinboard channel set to {interaction.channel.id} by {interaction.user.name.capitalize()}", "INFO")
+
+@tree.command(name="testembed", description="Spawn a test embed")
+async def testEmbed(interaction: discord.Interaction):
+    await interaction.response.defer() 
+
+    try:
+        view = CreateEmbed(data="Test Data", title="Test Pin") 
+        embed = view.pinEmbed()
+
+        await interaction.followup.send(embed=embed)
+        
+    except Exception as e:
+        log(f"Error in testEmbed: {e}", "ERROR")
+        await interaction.followup.send("An error occurred while generating the embed.")
+
+
+# ---------------- UI / Embeds ---------------- #
+class CreateEmbed(discord.ui.View):
+    def __init__(self, data, timeout=180, title="", description="", color=0xffffff):
+        super().__init__(timeout=timeout)
+        self.data = data
+        self.titleText = title
+        self.descText = description  
+        self.color = color
+
+    def pinEmbed(self):
+        embed = discord.Embed(
+            title=f"{self.titleText}",
+            color=0xFFFFFF 
+        )
+        return embed
 
 # ---------------- Run ---------------- #
 def main():
