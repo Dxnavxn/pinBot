@@ -38,9 +38,6 @@ if not TOKEN:
 else: 
     log("'DISCORD_TOKEN' Loaded", "SUCCESS")
 
-# ---------------- Defaults ---------------- #
-DEFAULT_CHANNEL_ID: int = None 
-
 # ---------------- In-Memory States ---------------- #
 userReactions: Dict[int, list[str]] = {}
 
@@ -70,7 +67,7 @@ def loadConfig():
     #  Check if file exists. If not, create it with current global values.
     if not os.path.exists(CONFIG_FILE):
         log(f"{CONFIG_FILE} not found. Creating a new one with defaults...", "WARNING")
-        saveConfig() # This writes the current globals to a new file
+        saveConfig() 
         return
 
     try:
@@ -97,7 +94,7 @@ async def on_ready():
         log(f"Failed to sync commands: {e}", "ERROR")
 
     # Bot Status | Version number
-    versionNumber = "v0.1"
+    versionNumber = "v0.0.3"
     await bot.change_presence(
             status=discord.Status.online,
             activity=discord.Game(name=versionNumber)
@@ -129,20 +126,31 @@ async def on_ready():
 
 # ---------------- Bot Events ---------------- #
 @bot.event
-async def on_raw_reaction_add(content: discord.RawReactionData) -> None:
-    if content.emoji.name == "📌":
+async def on_raw_reaction_add(payload: discord.RawReactionData) -> None:
+    if payload.user_id == bot.user.id:
+        return
+
+    if payload.emoji.name == "📌":
         try:
-            channel = bot.get_channel(content.channel_id) or await bot.fetch_channel(content.message_id)
-            message = await channel.fetch_message(content.message_id)
+            user = bot.get_user(payload.user_id) or await bot.fetch_user(payload.user_id)
+            channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
+            message = await channel.fetch_message(payload.message_id)
 
             if message.author.bot:
                 return
 
-            log(f"Message pinned | Channel: [#{channel.name}] | Message: {message.content[:25]}...","INFO")
+            if CHANNEL_ID:
+                target_id = int(CHANNEL_ID)
+                target_channel = bot.get_channel(target_id) or await bot.fetch_channel(target_id)
+                reactorName = user.name.capitalize()
+                view = CreateEmbed(data=message.content, title=f"📌 New Message Pinned | {reactorName}")
+                await target_channel.send(embed=view.pinEmbed())
+                log(f"Message Pinned | Channel: [#{channel.name}] | Author of Message: {message.author.name} | Message: {message.content} | Pin User: {reactorName}", "INFO")
+            else:
+                log("Pin detected, but 'CHANNEL_ID' is not configured.", "WARNING")
 
         except Exception as e:
-            log(f"Failed to fetch message for pin: {e}", "ERROR")
-    
+            log(f"Failed to process pin: {e}", "ERROR") 
 
 @bot.event
 async def on_raw_reaction_remove(content: discord.RawReactionData) -> None:
@@ -192,7 +200,7 @@ async def testEmbed(interaction: discord.Interaction):
 class CreateEmbed(discord.ui.View):
     def __init__(self, data, timeout=180, title="", description="", color=0xffffff):
         super().__init__(timeout=timeout)
-        self.data = data
+        self.data = data 
         self.titleText = title
         self.descText = description  
         self.color = color
@@ -200,7 +208,8 @@ class CreateEmbed(discord.ui.View):
     def pinEmbed(self):
         embed = discord.Embed(
             title=f"{self.titleText}",
-            color=0xFFFFFF 
+            description = str(self.data),
+            color=0xFFFFFF,
         )
         return embed
 
