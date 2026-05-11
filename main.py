@@ -1,4 +1,5 @@
 import os
+from os.path import exists
 import discord
 import json
 from discord.ext import commands
@@ -16,7 +17,8 @@ def log(message: str, level: str = "INFO") -> None:
         "SUCCESS": Fore.GREEN,
         "WARNING": Fore.YELLOW,
         "ERROR": Fore.RED,
-        "INIT": Fore.MAGENTA
+        "INIT": Fore.MAGENTA,
+        "PIN": Fore.BLUE
     }
     color = colors.get(level, "")
     print(color + f"[{timestamp}] [{level}] {message}")
@@ -32,6 +34,9 @@ GUILD_ID = os.getenv("GUILD_ID")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 OWNER_ID = os.getenv("OWNER_ID")
 CONFIG_FILE = "config.json"
+PIN_FILE = "pins.json"
+PINCOUNT_FILE = "pinCount.json"
+
 
 if not TOKEN:
     log("'DISCORD_TOKEN' is not set in the environment", "ERROR")
@@ -39,7 +44,8 @@ else:
     log("'DISCORD_TOKEN' Loaded", "SUCCESS")
 
 # ---------------- In-Memory States ---------------- #
-userReactions: Dict[int, list[str]] = {}
+pinCount: Dict[int, list[str]] = {}
+pins: Dict[int, list[str]] = {}
 
 
 
@@ -50,26 +56,44 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
 # ---------------- Save/Load Config ---------------- #
-def saveConfig():
-    """Save the current CHANNEL_ID to a JSON file."""
-    data = {
-        "channel_id": CHANNEL_ID,
-        "owner_id": OWNER_ID,
-    }
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
-    log(f"Configuration saved to {CONFIG_FILE}", "SUCCESS")
+def saveJson(filename: str, data: dict):
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+            log(f"Data saved to '{filename}'", "SUCCESS")
+    except Exception as e:
+        log(f"Failed to save '{filename}': {e}","ERROR")
+
+def loadJson(filename: str, data: dict):
+    if not os.path.exists(filename):
+        log(f"'{filename}' not found creating a new one with defaults...", "WARNING")
+        initalData = data if data is not None else {}
+        saveJson(filename, initalData)
+        return initalData
+
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            log(f"JSON Loaded: '{filename}'", "SUCCESS")
+            return data
+    except Exception as e:
+        log(f"Failed to load config: {e}", "ERROR")
+        return data if data is not None else {}
 
 def loadConfig():
     """Load configuration from JSON; create it with defaults if missing."""
-    global CHANNEL_ID, OWNER_ID, PING_ROLE_ID
+    global CHANNEL_ID, OWNER_ID
     
     #  Check if file exists. If not, create it with current global values.
     if not os.path.exists(CONFIG_FILE):
         log(f"{CONFIG_FILE} not found. Creating a new one with defaults...", "WARNING")
-        saveConfig() 
-        return
 
+        configData = {
+                "channel_id": CHANNEL_ID,
+                "owner_id": OWNER_ID
+            }
+        saveJson("config.json", configData) 
+        return
     try:
         with open(CONFIG_FILE, "r") as f:
             data = json.load(f)
@@ -77,10 +101,9 @@ def loadConfig():
             CHANNEL_ID = data.get("channel_id", CHANNEL_ID)
             OWNER_ID = data.get("owner_id", OWNER_ID)
             
-            log(f"Configuration loaded from {CONFIG_FILE}", "SUCCESS")
+            log(f"Config file found: {CONFIG_FILE}", "INFO")
     except Exception as e:
         log(f"Failed to load config: {e}", "ERROR")
-
 
 
 # ---------------- Bot Setup ---------------- #
@@ -94,7 +117,7 @@ async def on_ready():
         log(f"Failed to sync commands: {e}", "ERROR")
 
     # Bot Status | Version number
-    versionNumber = "v0.0.3"
+    versionNumber = "v0.1.0"
     await bot.change_presence(
             status=discord.Status.online,
             activity=discord.Game(name=versionNumber)
@@ -116,7 +139,12 @@ async def on_ready():
                     OWNER_ID = guild.owner_id
                     ownerName = guild.get_member(OWNER_ID) or await guild.fetch_member(OWNER_ID)
                     log(f"Auto-configured Owner: {ownerName} ({OWNER_ID})", "INIT")
-                    saveConfig()
+                    updatedData = {
+                        "channel_id": CHANNEL_ID,
+                        "owner_id": OWNER_ID
+                    }
+                    saveJson(CONFIG_FILE, updatedData)
+
                 else:
                     log(f"Could not find guild with ID {guild_id}", "ERROR")
             except ValueError:
@@ -127,6 +155,8 @@ async def on_ready():
 # ---------------- Bot Events ---------------- #
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionData) -> None:
+    global pinCount 
+
     if payload.user_id == bot.user.id:
         return
 
@@ -140,23 +170,47 @@ async def on_raw_reaction_add(payload: discord.RawReactionData) -> None:
                 return
 
             if CHANNEL_ID:
+                if str(payload.channel_id) == str(CHANNEL_ID):
+                    return
+
+                reactorID = str(user.id)
+                messageID = str(message.id)
+                reactorName = user.name.capitalize()
                 target_id = int(CHANNEL_ID)
                 target_channel = bot.get_channel(target_id) or await bot.fetch_channel(target_id)
-                reactorName = user.name.capitalize()
-                view = CreateEmbed(data=message.content, title=f"📌 New Message Pinned | {reactorName}")
+
+                if messageID in pins:
+                    await channel.send(f"{user.mention} > This message has already been pinned..")
+                    log(f"Message: [{messageID}] already pinned. Skipping..", "WARNING")
+                    return
+                pins[messageID] = reactorID
+            
+                if reactorID not in pinCount:
+                    pinCount[reactorID] = 0
+                pinCount[reactorID] += 1
+
+                saveJson(PINCOUNT_FILE, pinCount) 
+                saveJson(PIN_FILE, pins)
+                log(f"Pin Count for {reactorName}: {pinCount[reactorID]}", "INFO")
+                
+                embedContent = f"{message.author.name.capitalize()}: {message.content}"
+                view = CreateEmbed(data=embedContent, title=f"📌 {reactorName} | Pin #{pinCount[reactorID]}") 
+                await channel.send(f"{user.mention} > Message pinned. ")
                 await target_channel.send(embed=view.pinEmbed())
-                log(f"Message Pinned | Channel: [#{channel.name}] | Author of Message: {message.author.name} | Message: {message.content} | Pin User: {reactorName}", "INFO")
+                log(f"Author: {message.author.name.capitalize()} | Message: '{message.content[:15]}...' | Pin User: {reactorName}", "PIN")
+
             else:
                 log("Pin detected, but 'CHANNEL_ID' is not configured.", "WARNING")
 
         except Exception as e:
-            log(f"Failed to process pin: {e}", "ERROR") 
+            log(f"Failed to process pin: {e}", "ERROR")
+
 
 @bot.event
 async def on_raw_reaction_remove(content: discord.RawReactionData) -> None:
     if content.emoji.name == "📌":
         try:
-            channel = bot.get_channel(content.channel_id) or await bot.fetch_channel(content.message_id)
+            channel = bot.get_channel(content.channel_id) or await bot.fetch_channel(content.channel_id)
             message = await channel.fetch_message(content.message_id)
             log(f"Message removed | Channel: [#{channel.name}] | Message: {message.content[:25]}...","INFO")
 
@@ -176,8 +230,13 @@ async def set_channel(interaction: discord.Interaction) -> None:
         return await interaction.response.send_message("You do not have permission to set channels.", ephemeral=True)
 
     CHANNEL_ID = interaction.channel.id
-    saveConfig()
-
+    
+    updatedData = {
+            "channel_id": CHANNEL_ID,
+            "owner_id": OWNER_ID
+        }
+    saveJson(CONFIG_FILE, updatedData)
+    
     await interaction.response.send_message(f"Pinboard channel set to: {interaction.channel.mention}")
     log(f"Pinboard channel set to {interaction.channel.id} by {interaction.user.name.capitalize()}", "INFO")
 
@@ -211,12 +270,25 @@ class CreateEmbed(discord.ui.View):
             description = str(self.data),
             color=0xFFFFFF,
         )
+        dateString = datetime.datetime.now().strftime("%b %d, %Y | %I:%M %p")
+        embed.set_footer(text=f"Pinned on {dateString}")
         return embed
 
 # ---------------- Run ---------------- #
 def main():
-    loadConfig()
-    log("'CONFIG_FILE' Loaded", "SUCCESS")
+    global CHANNEL_ID, OWNER_ID, pinCount, pins
+
+    # Load config.json
+    config = loadJson(CONFIG_FILE, data={"channel_id": None, "owner_id": None})
+    CHANNEL_ID = config.get("channel_id")
+    OWNER_ID = config.get("owner_id")
+    log(f"'config.json' Loaded | Channel: {CHANNEL_ID} | Owner: {OWNER_ID}", "INFO")
+
+    #Load pinCount.json
+    pinCount = loadJson(PINCOUNT_FILE, data={})
+
+    #Load pins.json
+    pins = loadJson(PIN_FILE, data={})
 
     try:
         bot.run(TOKEN)
