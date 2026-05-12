@@ -117,7 +117,7 @@ async def on_ready():
         log(f"Failed to sync commands: {e}", "ERROR")
 
     # Bot Status | Version number
-    versionNumber = "v0.1.0"
+    versionNumber = "v0.2.1"
     await bot.change_presence(
             status=discord.Status.online,
             activity=discord.Game(name=versionNumber)
@@ -126,6 +126,7 @@ async def on_ready():
     global OWNER_ID
     log(f"Logged in as {bot.user} | {versionNumber}", "SUCCESS")
 
+    # Auto-Configure OWNER if not set
     if OWNER_ID is None:
         if GUILD_ID:
             try:
@@ -134,7 +135,8 @@ async def on_ready():
                 
                 if not guild:
                     guild = await bot.fetch_guild(guild_id)
-
+                
+                # Set owner
                 if guild:
                     OWNER_ID = guild.owner_id
                     ownerName = guild.get_member(OWNER_ID) or await guild.fetch_member(OWNER_ID)
@@ -155,8 +157,10 @@ async def on_ready():
 # ---------------- Bot Events ---------------- #
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionData) -> None:
-    global pinCount 
-
+    global pinCount
+    foundImage = None
+    
+    # If the message is from the bot
     if payload.user_id == bot.user.id:
         return
 
@@ -179,27 +183,38 @@ async def on_raw_reaction_add(payload: discord.RawReactionData) -> None:
                 target_id = int(CHANNEL_ID)
                 target_channel = bot.get_channel(target_id) or await bot.fetch_channel(target_id)
 
+                # If the message has already been pinned
                 if messageID in pins:
                     await channel.send(f"{user.mention} > This message has already been pinned..")
                     log(f"Message: [{messageID}] already pinned. Skipping..", "WARNING")
                     return
+
+                # If the user has not sent a pin before, add ID to 'pinCount.json'
                 pins[messageID] = reactorID
-            
                 if reactorID not in pinCount:
                     pinCount[reactorID] = 0
                 pinCount[reactorID] += 1
 
+                # If the message has a picture or GIF
+                if message.attachments:
+                    if any(message.attachments[0].filename.lower().endswith(ext) for ext in ["png", "jpg", "jpeg", "gif", "webp"]):
+                        foundImage = message.attachments[0].url
+                        log("Image found.", "PIN")
+
+                # Save jsons
                 saveJson(PINCOUNT_FILE, pinCount) 
                 saveJson(PIN_FILE, pins)
                 log(f"Pin Count for {reactorName}: {pinCount[reactorID]}", "INFO")
                 
+                # Send Embed
                 embedContent = f"{message.author.name.capitalize()}: {message.content}"
-                view = CreateEmbed(data=embedContent, title=f"📌 {reactorName} | Pin #{pinCount[reactorID]}") 
-                await channel.send(f"{user.mention} > Message pinned. ")
+                view = CreateEmbed(data=embedContent, title=f"📌 {reactorName} | Pin #{pinCount[reactorID]}", image_url=foundImage)
+                await channel.send(f"{user.mention} > Message pinned to {target_channel.mention}. ")
                 await target_channel.send(embed=view.pinEmbed())
                 log(f"Author: {message.author.name.capitalize()} | Message: '{message.content[:15]}...' | Pin User: {reactorName}", "PIN")
 
             else:
+                await channel.send(f"{user.mention} > The pin channel has not been set...")
                 log("Pin detected, but 'CHANNEL_ID' is not configured.", "WARNING")
 
         except Exception as e:
@@ -221,16 +236,18 @@ async def on_raw_reaction_remove(content: discord.RawReactionData) -> None:
 @tree.command(name="setchannel", description="Set the channel where all pins will be sent")
 async def set_channel(interaction: discord.Interaction) -> None:
     global CHANNEL_ID
-    
+   
+   # If no 'OWNER_ID' is set
     if OWNER_ID is None:
         log("Permission check failed: OWNER_ID is not set in .env or config.", "ERROR")
         return await interaction.response.send_message("Bot configuration error: Owner ID not found.", ephemeral=True)
-
+    
+    # If user is not owner
     if interaction.user.id != int(OWNER_ID):
         return await interaction.response.send_message("You do not have permission to set channels.", ephemeral=True)
 
+    # Update and save json
     CHANNEL_ID = interaction.channel.id
-    
     updatedData = {
             "channel_id": CHANNEL_ID,
             "owner_id": OWNER_ID
@@ -257,19 +274,26 @@ async def testEmbed(interaction: discord.Interaction):
 
 # ---------------- UI / Embeds ---------------- #
 class CreateEmbed(discord.ui.View):
-    def __init__(self, data, timeout=180, title="", description="", color=0xffffff):
+    def __init__(self, data, timeout=180, title="", description="", color=0xffffff, image_url=None):
         super().__init__(timeout=timeout)
         self.data = data 
         self.titleText = title
         self.descText = description  
         self.color = color
+        self.imageURL = image_url
+
+
 
     def pinEmbed(self):
         embed = discord.Embed(
             title=f"{self.titleText}",
             description = str(self.data),
-            color=0xFFFFFF,
+            color=self.color,
         )
+        
+        if self.imageURL:
+            embed.set_image(url=self.imageURL)
+           
         dateString = datetime.datetime.now().strftime("%b %d, %Y | %I:%M %p")
         embed.set_footer(text=f"Pinned on {dateString}")
         return embed
