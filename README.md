@@ -1,10 +1,10 @@
-# 📌 Discord PinBoard Bot
+# Discord PinBoard Bot
 
 A lightweight, professional Discord bot designed to archive your favorite community moments. When a user reacts with 📌, the bot captures the message and images then posts them to a dedicated archive channel.
 
 ---
 
-## ✨ Features
+## Features
 
 *   **Full Media Support**: Automatically detects and embeds images, GIFs (Tenor/Giphy), and file attachments.
 *   **Persistent Storage**: Saves pin counts and message history to JSON files (`pins.json`, `pinCount.json`) so data survives bot restarts.
@@ -14,7 +14,7 @@ A lightweight, professional Discord bot designed to archive your favorite commun
 
 ---
 
-## 🚀 Setup & Installation
+## Setup & Installation
 
 ### 1. Prerequisites
 *   Python 3.8 or higher
